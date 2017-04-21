@@ -29,7 +29,7 @@
     <ClCompile Include="stdafx.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="MemoryManagment.cpp">
+    <ClCompile Include="usingMemoryManagment.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
