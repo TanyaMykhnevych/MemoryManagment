@@ -125,20 +125,12 @@ bool compare_region_by_size(const REGION& lhs, const REGION& rhs) {
 	return lhs.size < rhs.size;
 }
 
-LPVOID AllocateMemory(size_t memorySize)
+LPVOID AllocateMemory(PRLIST listFree, PRLIST listBusy, size_t memorySize)
 {
-	if (memorySize == 0)
+	if (memorySize == 0 | listFree->size() == 0)
 		return nullptr;
 
 	HANDLE h = GetCurrentProcess();
-
-	RLIST listFree[1];
-	RLIST listBusy[1];
-
-	CreateRegionList(listFree, listBusy);
-
-	if (listFree->size() == 0)
-		return nullptr;
 
 	listFree->sort(compare_region_by_size);
 
@@ -154,43 +146,60 @@ LPVOID AllocateMemory(size_t memorySize)
 
 	LPVOID res = VirtualAllocEx(h, i->address, memorySize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
-	/* для проверки, чтоб посмотреть значения переменных
-	RLIST listFree1[1];
-	RLIST listBusy1[1];
-	CreateRegionList(listFree1, listBusy1);
-	*/
+	MEMORY_BASIC_INFORMATION mInfo;
+	VirtualQueryEx(h, res, &mInfo, sizeof(mInfo));
 
+	REGION r;
+	r.address = res;
+	r.size = mInfo.RegionSize;
+
+	listBusy->push_back(r);
+
+	for (RLIST::iterator j = listFree->begin(); j != listFree->end(); j++) {
+		// i - тот, от которого мы взяли кусок памяти
+		if (j->size == i->size) {
+			size_t sizeToAdd = j->size - r.size;
+			if (j != listFree->begin())
+			{
+				(j--)->size += sizeToAdd;
+				listFree->erase(++j);
+				break;
+			}
+			else
+			{					
+				(j++)->size += sizeToAdd;
+				listFree->erase(--j);
+				break;
+			}
+		}
+	}	
 	return res;
 }
 
-BOOL FreeMemory(LPVOID address)
+BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, LPVOID address)
 {
-	if (address == nullptr)
+	if (address == nullptr | listBusy->size() == 0)
 		return FALSE;
 
-	/* для проверки, чтоб посмотреть значения переменных
-	MEMORY_BASIC_INFORMATION mInfo;
-	RLIST listFree2[1];
-	RLIST listBusy2[1];
-	CreateRegionList(listFree2, listBusy2);
-	 */
-
 	HANDLE h = GetCurrentProcess();
-
-	/* для проверки, чтоб посмотреть значения переменных
-	VirtualQueryEx(h, (LPVOID)address, &mInfo, sizeof(mInfo));	 
-	BOOL b = mInfo.State == MEM_FREE;
-	*/
-
+	
 	BOOL res = VirtualFreeEx(h, address, 0, MEM_RELEASE);
 
-	/* для проверки, чтоб посмотреть значения переменных
-	VirtualQueryEx(h, (LPVOID)address, &mInfo, sizeof(mInfo));
-	b = mInfo.State == MEM_FREE;
-	RLIST listFree3[1];
-	RLIST listBusy3[1];
-	CreateRegionList(listFree3, listBusy3);
-	*/
+	MEMORY_BASIC_INFORMATION mInfo;
+	VirtualQueryEx(h, address, &mInfo, sizeof(mInfo));
+
+	REGION r;
+	r.address = 0;
+	r.size = mInfo.RegionSize;
+
+	listFree->push_back(r);
+
+	for (RLIST::iterator j = listBusy->begin(); j != listBusy->end(); j++) {
+		if (j->address == mInfo.BaseAddress) {
+			listBusy->erase(j);
+			break;
+		}
+	}
 
 	return res;
 }
@@ -311,14 +320,14 @@ int main()
 {
 	PrintSystemInfo();
 
-	LPVOID address = AllocateMemory(99999);
-
-	FreeMemory(address);
-
 	RLIST rfree[1];
 	RLIST rbusy[1];
 
 	CreateRegionList(rfree, rbusy);
+
+	LPVOID address = AllocateMemory(rfree, rbusy, 999);
+
+	FreeMemory(rfree, rbusy, address);
 
 	PrintRegionsList(rfree, rbusy);
 
