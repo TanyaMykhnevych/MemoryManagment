@@ -196,6 +196,7 @@ BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, LPVOID address)
 	}
 
 	// объединить 2 подряд свободных блока в 1	
+	// перед ним
 	VirtualQueryEx(h, &(r.address) - 1, &mInfo, sizeof(mInfo));
 	REGION free;
 	if(mInfo.State == MEM_FREE)
@@ -203,7 +204,7 @@ BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, LPVOID address)
 		free.address = mInfo.BaseAddress;
 		free.size = mInfo.RegionSize + r.size;
 	}
-	else
+	else // после него
 	{
 		VirtualQueryEx(h, &(r.address) + r.size + 1, &mInfo, sizeof(mInfo));
 		if (mInfo.State == MEM_FREE)
