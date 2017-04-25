@@ -137,11 +137,11 @@ LPVOID AllocateMemory(PRLIST listFree, PRLIST listBusy, size_t memorySize)
 	RLIST::iterator i;
 
 	for (i = listFree->begin(); i != listFree->end(); i++) {
-		if (i->size > memorySize)
+		if (i->size >= memorySize) // нашли наименьший достаточный
 			break;
 	}
 
-	if (i == listFree->end())
+	if (i == listFree->end()) // если не нашли наименьший достаточный
 		return nullptr;
 
 	LPVOID res = VirtualAllocEx(h, i->address, memorySize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
@@ -153,26 +153,20 @@ LPVOID AllocateMemory(PRLIST listFree, PRLIST listBusy, size_t memorySize)
 	r.address = res;
 	r.size = mInfo.RegionSize;
 
+	// добавление в список занятых блоков нового
 	listBusy->push_back(r);
 
 	for (RLIST::iterator j = listFree->begin(); j != listFree->end(); j++) {
 		// i - тот, от которого мы взяли кусок памяти
 		if (j->size == i->size) {
-			size_t sizeToAdd = j->size - r.size;
-			if (j != listFree->begin())
-			{
-				(j--)->size += sizeToAdd;
-				listFree->erase(++j);
-				break;
-			}
-			else
-			{					
-				(j++)->size += sizeToAdd;
-				listFree->erase(--j);
-				break;
-			}
+			REGION reg;
+			reg.size = j->size - r.size;
+			reg.address = &(r.address) + r.size;
+			listFree->erase(++j);
+			listFree->push_back(reg);
+			break;
 		}
-	}	
+	}
 	return res;
 }
 
@@ -182,18 +176,18 @@ BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, LPVOID address)
 		return FALSE;
 
 	HANDLE h = GetCurrentProcess();
-	
+
 	BOOL res = VirtualFreeEx(h, address, 0, MEM_RELEASE);
 
 	MEMORY_BASIC_INFORMATION mInfo;
 	VirtualQueryEx(h, address, &mInfo, sizeof(mInfo));
 
+	// блок, который стал свободным
 	REGION r;
-	r.address = 0;
+	r.address = mInfo.BaseAddress;
 	r.size = mInfo.RegionSize;
 
-	listFree->push_back(r);
-
+	// удаление блока из списка занятых после его освобождения
 	for (RLIST::iterator j = listBusy->begin(); j != listBusy->end(); j++) {
 		if (j->address == mInfo.BaseAddress) {
 			listBusy->erase(j);
@@ -201,6 +195,30 @@ BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, LPVOID address)
 		}
 	}
 
+	// объединить 2 подряд свободных блока в 1	
+	VirtualQueryEx(h, &(r.address) - 1, &mInfo, sizeof(mInfo));
+	REGION free;
+	if(mInfo.State == MEM_FREE)
+	{
+		free.address = mInfo.BaseAddress;
+		free.size = mInfo.RegionSize + r.size;
+	}
+	else
+	{
+		VirtualQueryEx(h, &(r.address) + r.size + 1, &mInfo, sizeof(mInfo));
+		if (mInfo.State == MEM_FREE)
+		{			
+			free.address = r.address;
+			free.size = mInfo.RegionSize + r.size;			
+		}
+		else
+		{
+			free = r;
+		}
+	}
+
+	listFree->push_back(free);
+		
 	return res;
 }
 
@@ -325,7 +343,7 @@ int main()
 
 	CreateRegionList(rfree, rbusy);
 
-	LPVOID address = AllocateMemory(rfree, rbusy, 999);
+	LPVOID address = AllocateMemory(rfree, rbusy, 102354);
 
 	FreeMemory(rfree, rbusy, address);
 
