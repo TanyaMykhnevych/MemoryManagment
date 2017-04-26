@@ -1,7 +1,6 @@
 #include "stdafx.h"
 #include <list>
 #include <Windows.h>
-#include <atomic>
 #include <iterator>
 using namespace std;
 
@@ -235,7 +234,7 @@ typedef struct
 // список страниц
 typedef list<PAGE> PAGES, *PPAGES;
 
-// count - кол-во страниц, кот можно выделить
+// count - кол-во страниц, которое можно выделить
 PVOID AddPage(PVOID *phAddresses, size_t count, PPAGES list, PPAGE page)
 {
 	PAGES::iterator it = list->begin();
@@ -350,12 +349,11 @@ int main()
 
 	PrintRegionsList(rfree, rbusy);
 
-	BYTE flags;
-	BYTE index = 1;
-
-	ChangeFlags(flags, index);
+	BYTE flags = 3;	
 
 	BYTE res = FindIndex(flags);
+
+	ChangeFlags(flags, res);
 
 	_tprintf(_T("\n%d\n"), res);
 
