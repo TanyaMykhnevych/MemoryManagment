@@ -124,103 +124,78 @@ bool compare_region_by_size(const REGION& lhs, const REGION& rhs) {
 	return lhs.size < rhs.size;
 }
 
-LPVOID AllocateMemory(PRLIST listFree, PRLIST listBusy, size_t memorySize)
+BOOL AllocMemory(PRLIST listFree, PRLIST listBusy, LPVOID memPtr, DWORD memSize, PREGION firstSufficient)
 {
-	if (memorySize == 0 | listFree->size() == 0)
-		return nullptr;
-
-	HANDLE h = GetCurrentProcess();
-
-	listFree->sort(compare_region_by_size);
-
-	RLIST::iterator i;
-
-	for (i = listFree->begin(); i != listFree->end(); i++) {
-		if (i->size >= memorySize) // нашли наименьший достаточный
-			break;
-	}
-
-	if (i == listFree->end()) // если не нашли наименьший достаточный
-		return nullptr;
-
-	LPVOID res = VirtualAllocEx(h, i->address, memorySize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-
-	MEMORY_BASIC_INFORMATION mInfo;
-	VirtualQueryEx(h, res, &mInfo, sizeof(mInfo));
-
-	REGION r;
-	r.address = res;
-	r.size = mInfo.RegionSize;
-
-	// добавление в список занятых блоков нового
-	listBusy->push_back(r);
-
-	for (RLIST::iterator j = listFree->begin(); j != listFree->end(); j++) {
-		// i - тот, от которого мы взяли кусок памяти
-		if (j->size == i->size) {
-			REGION reg;
-			reg.size = j->size - r.size;
-			reg.address = &(r.address) + r.size;
-			listFree->erase(++j);
-			listFree->push_back(reg);
-			break;
-		}
-	}
-	return res;
-}
-
-BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, LPVOID address)
-{
-	if (address == nullptr | listBusy->size() == 0)
-		return FALSE;
-
-	HANDLE h = GetCurrentProcess();
-
-	BOOL res = VirtualFreeEx(h, address, 0, MEM_RELEASE);
-
-	MEMORY_BASIC_INFORMATION mInfo;
-	VirtualQueryEx(h, address, &mInfo, sizeof(mInfo));
-
-	// блок, который стал свободным
-	REGION r;
-	r.address = mInfo.BaseAddress;
-	r.size = mInfo.RegionSize;
-
-	// удаление блока из списка занятых после его освобождения
-	for (RLIST::iterator j = listBusy->begin(); j != listBusy->end(); j++) {
-		if (j->address == mInfo.BaseAddress) {
-			listBusy->erase(j);
-			break;
-		}
-	}
-
-	// объединить 2 подряд свободных блока в 1	
-	// перед ним
-	VirtualQueryEx(h, &(r.address) - 1, &mInfo, sizeof(mInfo));
-	REGION free;
-	if(mInfo.State == MEM_FREE)
+	listFree->sort(compare_region_by_size);   
+	RLIST::iterator it = listFree->begin();
+	while (it != listFree->end())
 	{
-		free.address = mInfo.BaseAddress;
-		free.size = mInfo.RegionSize + r.size;
-	}
-	else // после него
-	{
-		VirtualQueryEx(h, &(r.address) + r.size + 1, &mInfo, sizeof(mInfo));
-		if (mInfo.State == MEM_FREE)
-		{			
-			free.address = r.address;
-			free.size = mInfo.RegionSize + r.size;			
-		}
-		else
+		if (it->size >= memSize)
 		{
-			free = r;
+			*firstSufficient = *it;
+			break;
 		}
 	}
 
-	listFree->push_back(free);
-		
-	return res;
+	if (it == listFree->end())
+	{
+		return FALSE;
+	}
+
+	if (it->size > memSize)
+	{
+		it->size -= memSize;
+		it->address = (PVOID)((PBYTE)it->address + memSize);
+		firstSufficient->size = memSize;
+	}
+
+	memPtr = it->address;
+	listBusy->push_back(*firstSufficient);
+	return memPtr != NULL;
 }
+
+VOID CombineBlocks(PRLIST listFree)
+{
+	list<RLIST::iterator> iterators;
+	for (RLIST::iterator it1 = listFree->begin(); it1 != listFree->end(); it1++)
+	{
+		for (RLIST::iterator it2 = listFree->begin(); it2 != listFree->end(); it2++)
+		{
+			if ((PBYTE)(it1->address) + it1->size == (PBYTE)(it2->address) && it1 != it2)
+			{
+				it1->size += it2->size;
+				iterators.push_back(it2);
+			}
+		}
+	}
+
+	for (list<RLIST::iterator>::iterator iterator = iterators.begin(); iterator != iterators.end(); iterator++)
+	{
+		listFree->erase(*iterator);
+	}
+}
+
+BOOL FreeMemory(PRLIST listFree, PRLIST listBusy, const PREGION region)
+{
+	if (!region)
+	{
+		return FALSE;
+	}
+	
+	listFree->push_back(*region);
+	CombineBlocks(listFree);
+
+	for (RLIST::iterator it = listBusy->begin(); it != listBusy->end(); it++)
+	{
+		if (it->address == region->address)
+		{
+			listBusy->erase(it);
+		}
+	}
+
+	return TRUE;
+}
+
 
 
 // --------------------Task3--------------------
@@ -238,6 +213,7 @@ typedef list<PAGE> PAGES, *PPAGES;
 PVOID AddPage(PVOID *phAddresses, size_t count, PPAGES list, PPAGE page)
 {
 	PAGES::iterator it = list->begin();
+	bool ifListContainsPage = false;
 	while (it != list->end())
 	{
 		// если страница была загружена в память,
@@ -246,13 +222,14 @@ PVOID AddPage(PVOID *phAddresses, size_t count, PPAGES list, PPAGE page)
 		{
 			page->phAddress = it->phAddress;
 			list->erase(it);
+			ifListContainsPage = true;
 			break;
 		}
 		++it;
 	}
 
 	// вышли из цикла, потому как дошли до конца
-	if (it == list->end())
+	if (!ifListContainsPage)
 	{
 		if (list->size() < count) // есть свободные позиции
 		{
@@ -266,6 +243,9 @@ PVOID AddPage(PVOID *phAddresses, size_t count, PPAGES list, PPAGE page)
 	list->push_back(*page);
 	return page->phAddress;
 }
+
+
+
 
 
 // --------------------Task4--------------------
@@ -315,7 +295,7 @@ VOID ChangeFlags(BYTE &flags, BYTE bitIndex)
 BYTE FindIndex(BYTE flags)
 {
 	BYTE index;
-	if (flags & 1)
+	if (!(flags & 1))
 	{
 		index = 2;
 		if (flags & 4)
@@ -336,6 +316,48 @@ BYTE FindIndex(BYTE flags)
 
 int main()
 {
+
+	SYSTEM_INFO s;
+	MEMORYSTATUSEX m;
+	GetMemoryInfo(&s, &m);
+
+	REGION r1;
+	r1.address = (PVOID)8;
+	r1.size = 15;
+	REGION r2;
+	r2.address = (PVOID)22;
+	r2.size = 3;
+	REGION r3;
+	r3.address = 0;
+	r3.size = 8;
+	RLIST lst = { r1,r2,r3 };
+	CombineBlocks(&lst);
+
+
+	PAGE p1;
+	p1.logAddress = (PVOID)0;
+	p1.phAddress = (PVOID)0;
+
+	PAGE p2;
+	p2.logAddress = (PVOID)5;
+	p2.phAddress = (PVOID)1;
+
+	PAGE p3;
+	p3.logAddress = (PVOID)10;
+	p3.phAddress = (PVOID)2;
+
+	PAGE p4;
+	p4.logAddress = (PVOID)20;
+	p4.phAddress = (PVOID)0;
+
+	PAGES pages = {};
+	PVOID phAddresses[] = { (PVOID)0, (PVOID)5, (PVOID)10 };
+
+	size_t count = 3;
+
+	AddPage(phAddresses, count, &pages, &p4);
+
+
 	PrintSystemInfo();
 
 	RLIST rfree[1];
@@ -343,13 +365,10 @@ int main()
 
 	CreateRegionList(rfree, rbusy);
 
-	LPVOID address = AllocateMemory(rfree, rbusy, 102354);
-
-	FreeMemory(rfree, rbusy, address);
 
 	PrintRegionsList(rfree, rbusy);
 
-	BYTE flags = 3;	
+	BYTE flags = 3;
 
 	BYTE res = FindIndex(flags);
 
@@ -361,4 +380,5 @@ int main()
 	system("pause");
 	return 0;
 }
+
 
